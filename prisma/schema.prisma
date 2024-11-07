@@ -1,0 +1,243 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id              Int     @id @default(autoincrement())
+  name            String 
+  login String @unique
+  email String @unique
+  phone_number  String 
+  hashedPassword  String
+  description     String?
+  confirmPassword String
+  roleId          Int
+  hashed_refresh_token  String?
+  isActive        Boolean @default(false)
+  isCreator       Boolean @default(false)
+
+  // Role jadvali bilan bog'lanish
+  role Roles @relation(fields: [roleId], references: [id])
+
+  @@map("admin")
+}
+
+
+
+model Child {
+  id        Int      @id @default(autoincrement())
+  firstName String
+  lastName  String
+  birthDate String
+  gender    String
+  photo     String
+  groupId   Int
+
+  // Bola va ota-onalar o'rtasidagi ko'pdan-ko'p munosabat
+  user          ChildUser[]
+  payments         Payments[]
+  attendance_group Attendance_group[]
+
+  @@map("child")
+
+}
+
+model User {
+  id                 Int        @id @default(autoincrement())
+  firstName          String
+  lastName           String
+  phoneNumber        String   @unique
+  email              String   @unique
+  passportInfo       String
+  workplace          String?
+  role               RoleUser @relation(fields: [roleId], references: [id])
+  roleId             Int
+  // childId     Int
+  hashedPassword     String
+  // confirm_password  String
+  verified   Boolean @default(false)
+
+  hashedRefreshToken String?
+  is_active          Boolean    @default(false)
+
+
+  children ChildUser[]
+  feedback  Feedback[]
+
+  @@map("User")
+}
+
+model ChildUser {
+  id       Int    @id @default(autoincrement())
+  child    Child  @relation(fields: [childId], references: [id])
+  childId  Int
+  User   User @relation(fields: [userId], references: [id])
+  userId Int
+
+  @@unique([childId, userId])
+  @@map("childUser")
+}
+
+model RoleUser {
+  id   Int    @id @default(autoincrement())
+  name String
+  users User[]
+
+  @@map("roleUser")
+}
+
+model Payments {
+  id            Int      @id @default(autoincrement())
+  price         Float
+  child         Child    @relation(fields: [childId], references: [id])
+  childId       Int
+  paymentDate   DateTime
+  paymentMethod String
+  paymentType   String
+  is_paid       Boolean
+
+  @@map("payments")
+}
+
+model Roles {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+
+
+  admins Admin[]
+
+  staffs StaffRole[]
+
+  @@map("roles")
+}
+
+model Staff {
+  id                   Int      @id @default(autoincrement())
+  first_name           String
+  last_name            String
+  phone_number         String
+  login                String   @unique
+  hashed_password      String
+  is_active            Boolean? @default(false)
+  hashed_refresh_token String?
+
+  roles      StaffRole[]
+  GroupStaff GroupStaff[]
+  schedule   Schedules[]
+
+  @@map("staff")
+}
+
+model StaffRole {
+  staff   Staff @relation(fields: [staffId], references: [id])
+  staffId Int
+
+  role   Roles @relation(fields: [roleId], references: [id])
+  roleId Int
+
+  @@id([staffId, roleId])
+  @@map("staff_role")
+}
+
+model Group {
+  id              Int     @id @default(autoincrement())
+  group_name      String  @unique
+  age_range       String
+  max_capacity    String
+  building_number String
+  room_number     String
+  room_floor      Int
+  is_active       Boolean @default(false)
+
+  GroupStaff       GroupStaff[]
+  schedule         Schedules[]
+  attendance_group Attendance_group[]
+  events           Events[]
+
+  @@map("group")
+}
+
+model GroupStaff {
+  staff   Staff @relation(fields: [staffId], references: [id])
+  staffId Int
+
+  group   Group @relation(fields: [groupId], references: [id])
+  groupId Int
+
+  @@id([staffId, groupId])
+  @@map("group_staff")
+}
+
+model Schedules {
+  id         Int    @id @default(autoincrement())
+  group      Group  @relation(fields: [groupId], references: [id])
+  groupId    Int
+  staff      Staff  @relation(fields: [staffId], references: [id])
+  staffId    Int
+  activity   String
+  date       String
+  start_time String
+  end_time   String
+
+  @@map("schedules")
+}
+
+model Attendance_group {
+  id      Int   @id @default(autoincrement())
+  child   Child @relation(fields: [childId], references: [id])
+  childId Int
+
+  group         Group  @relation(fields: [groupId], references: [id])
+  groupId       Int
+  date          String
+  check_in_time String
+  check_up_time String
+
+  @@map("attendanceGroup")
+}
+
+model Events {
+  id         Int    @id @default(autoincrement())
+  titel      String
+  desciption String
+  group      Group  @relation(fields: [groupId], references: [id])
+  groupId    Int
+  created_at String
+  status     String
+
+  @@map("events")
+}
+
+enum UserType {
+  Admin   
+  User
+  Staff
+}
+
+model Feedback {
+  id        Int      @id @default(autoincrement())
+  content   String
+  userId    Int
+  userType  UserType
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id]) // user bilan bog'lanish
+}
+
+model Otp{
+  id        Int      @id @default(autoincrement())
+  otp String
+  expiration_time DateTime
+  verified Boolean @default(false)
+  email String
+
+}

@@ -1,0 +1,148 @@
+import { BadRequestException, ForbiddenException, Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { JwtService } from "@nestjs/jwt";
+import { AuthUserSignInDto } from "./dto/user-auth-signin.dto";
+import { Response } from "express";
+import { hash, compare } from "bcrypt";
+import { ResponseFields, Tokens } from "../common/types";
+import { User } from "@prisma/client";
+import * as winston from "winston";
+
+const winstonConfig = winston.createLogger({
+  level: "info",
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => {
+      return `${timestamp} [${level}]: ${message}`;
+    })
+  ),
+  transports: [
+    new winston.transports.Console({ level: "info" }),
+    new winston.transports.File({ filename: "app.log", level: "info" }),
+  ],
+});
+
+@Injectable()
+export class UserAuthService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService
+  ) {}
+
+  async generateTokens(user: User): Promise<Tokens> {
+    const payload = { id: user.id, email: user.email };
+    const [access_token, refresh_token] = await Promise.all([
+      this.jwtService.sign(payload, {
+        secret: process.env.ACCESS_TOKEN_KEY,
+        expiresIn: process.env.ACCESS_TOKEN_TIME,
+      }),
+      this.jwtService.sign(payload, {
+        secret: process.env.REFRESH_TOKEN_KEY,
+        expiresIn: process.env.REFRESH_TOKEN_TIME,
+      }),
+    ]);
+    return { access_token, refresh_token };
+  }
+
+  async updateRefreshToken(userId: number, refresh_token: string) {
+    const hashed_refresh_token = await hash(refresh_token, 7);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { hashedRefreshToken: hashed_refresh_token },
+    });
+    winstonConfig.info(`Refresh token updated for user ${userId}`);
+  }
+
+  async signUp(createUserDto, res: Response): Promise<ResponseFields> {
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: createUserDto.email },
+    });
+    if (existingUser) {
+      winstonConfig.error(`Email already exists: ${createUserDto.email}`);
+      throw new BadRequestException("Email already exists");
+    }
+
+    const newUser = await this.prisma.user.create({
+      data: {
+        ...createUserDto,
+        hashedPassword: await hash(createUserDto.password, 10),
+        is_active: true,
+      },
+    });
+
+    winstonConfig.info(`New user created: ${newUser.email}`);
+
+    const { access_token, refresh_token } = await this.generateTokens(newUser);
+
+    await this.updateRefreshToken(newUser.id, refresh_token);
+
+    res.cookie("refresh_token", refresh_token, {
+      httpOnly: true,
+      maxAge: +process.env.COOKIE_TIME,
+    });
+
+    return {
+      id: newUser.id,
+      access_token,
+    };
+  }
+
+  async signIn(
+    authUserSignInDto: AuthUserSignInDto,
+    res: Response
+  ): Promise<ResponseFields> {
+    const { email, password } = authUserSignInDto;
+
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      winstonConfig.error(`Invalid email attempt: ${email}`);
+      throw new BadRequestException("Invalid email or password");
+    }
+
+    const validPassword = await compare(password, user.hashedPassword);
+    if (!validPassword) {
+      winstonConfig.error(`Invalid password attempt for email: ${email}`);
+      throw new BadRequestException("Invalid email or password");
+    }
+
+    const tokens = await this.generateTokens(user);
+
+    await this.updateRefreshToken(user.id, tokens.refresh_token);
+
+    res.cookie("refresh_token", tokens.refresh_token, {
+      httpOnly: true,
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    winstonConfig.info(`User signed in: ${user.email}`);
+
+    return {
+      id: user.id,
+      access_token: tokens.access_token,
+    };
+  }
+
+  async signOut(userId: number, res: Response) {
+    const user = await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        hashedRefreshToken: {
+          not: null,
+        },
+      },
+      data: { hashedRefreshToken: null },
+    });
+
+    if (!user) {
+      winstonConfig.error(`Sign-out failed for user ${userId}`);
+      throw new ForbiddenException("Sign-out failed");
+    }
+
+    res.clearCookie("refresh_token");
+    winstonConfig.info(`User signed out: ${userId}`);
+
+    return {
+      message: "User successfully signed out",
+    };
+  }
+}
